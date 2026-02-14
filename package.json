@@ -1,0 +1,14 @@
+{
+  "name": "chatqna-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @chatqna/web --filter @chatqna/api dev",
+    "dev:web": "pnpm --filter @chatqna/web dev",
+    "dev:api": "pnpm --filter @chatqna/api dev",
+    "dev:rag": "uvicorn app.main:app --reload --port 8002 --app-dir apps/rag-service",
+    "build": "pnpm -r --filter @chatqna/web --filter @chatqna/api build",
+    "typecheck": "pnpm -r --filter @chatqna/web --filter @chatqna/api typecheck"
+  }
+}

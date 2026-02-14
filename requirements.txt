@@ -1,0 +1,19 @@
+streamlit
+pymupdf
+pillow
+openai
+langchain-text-splitters
+langchain-huggingface
+langchain-community
+langchain-qdrant
+qdrant-client
+faiss-cpu
+sentence-transformers
+numpy
+pandas
+matplotlib
+
+# Optional parsing enhancements
+pdfplumber
+unstructured
+pytesseract

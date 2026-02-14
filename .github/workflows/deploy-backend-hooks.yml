@@ -1,0 +1,39 @@
+name: Trigger Backend Deploy Hooks
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_api:
+        description: "Trigger API deploy hook"
+        type: boolean
+        default: true
+      deploy_rag:
+        description: "Trigger rag-service deploy hook"
+        type: boolean
+        default: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger API deploy hook
+        if: ${{ inputs.deploy_api }}
+        env:
+          API_DEPLOY_HOOK: ${{ secrets.API_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$API_DEPLOY_HOOK" ]; then
+            echo "API_DEPLOY_HOOK secret is not set."
+            exit 1
+          fi
+          curl -fsS -X POST "$API_DEPLOY_HOOK"
+
+      - name: Trigger rag-service deploy hook
+        if: ${{ inputs.deploy_rag }}
+        env:
+          RAG_DEPLOY_HOOK: ${{ secrets.RAG_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$RAG_DEPLOY_HOOK" ]; then
+            echo "RAG_DEPLOY_HOOK secret is not set."
+            exit 1
+          fi
+          curl -fsS -X POST "$RAG_DEPLOY_HOOK"
