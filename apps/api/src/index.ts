@@ -9,9 +9,36 @@ import { healthRouter } from "./routes/health.js";
 const app = express();
 const port = Number(process.env.PORT || 8787);
 
+function normalizeOrigin(value: string): string | null {
+  const raw = (value || "").trim();
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return null;
+  }
+}
+
+const allowedOrigins = (process.env.CORS_ORIGIN || "http://localhost:5173")
+  .split(",")
+  .map((v) => normalizeOrigin(v))
+  .filter((v): v is string => Boolean(v));
+
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN?.split(",") || ["http://localhost:5173"],
+    origin: (origin, callback) => {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+      const normalized = normalizeOrigin(origin);
+      if (normalized && allowedOrigins.includes(normalized)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error(`CORS origin not allowed: ${origin}`));
+    },
     credentials: true,
   })
 );
