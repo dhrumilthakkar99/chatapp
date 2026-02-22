@@ -6,7 +6,7 @@ This guide deploys ChatQnA on free tiers first, then lets you scale later.
 
 - Frontend: GitHub Pages (`apps/web`)
 - API: Render free web service (`apps/api`)
-- RAG service: Render free web service (`apps/rag-service`)
+- RAG service: Hugging Face Spaces free CPU (`apps/rag-service`)
 - Postgres: Render free Postgres
 - Vectors: Qdrant Cloud free cluster
 - Auth: Clerk free (magic link/OAuth)
@@ -16,13 +16,23 @@ This guide deploys ChatQnA on free tiers first, then lets you scale later.
 1. Create Clerk app.
 1. Enable email magic-link and OAuth providers you want.
 1. Create Qdrant Cloud free cluster (1 GB) and copy URL/API key.
-1. In Render, create a **Blueprint** from this repo using `render.yaml`.
-1. After first deploy, copy the public URL of `chatqna-rag-service`.
-1. Set `RAG_SERVICE_URL` env var on `chatqna-api` to that URL (for example `https://chatqna-rag-service.onrender.com`).
+1. In Hugging Face, create a new **Space**:
+   - SDK: `Docker`
+   - Source directory: `apps/rag-service`
+   - It will use `apps/rag-service/Dockerfile`.
+1. Add Space secrets:
+   - `QDRANT_URL`, `QDRANT_API_KEY`, `HUGGINGFACE_API_TOKEN`, `GROQ_API_KEY`
+1. Set Space variables:
+   - `KB_BACKEND=qdrant`
+   - `RAG_RETRIEVAL_MODE=lexical` (cost/memory optimized default)
+   - `QDRANT_COLLECTION=doc_kb`
+1. Deploy the Space and copy URL (for example `https://<space-name>.hf.space`).
+1. In Render, create a **Blueprint** from `render-api-only.yaml`.
+1. Set `RAG_SERVICE_URL` on `chatqna-api` to your Space URL.
 
 ## 2) Configure Render env vars
 
-### `chatqna-rag-service`
+### Hugging Face Space (`apps/rag-service`)
 
 - `QDRANT_URL`
 - `QDRANT_API_KEY`
@@ -31,6 +41,7 @@ This guide deploys ChatQnA on free tiers first, then lets you scale later.
 
 Defaults in `render.yaml` already set:
 - `KB_BACKEND=qdrant`
+- `RAG_RETRIEVAL_MODE=lexical`
 - `QDRANT_COLLECTION=doc_kb`
 - `RAG_MODEL_ID=openai/gpt-oss-20b`
 
@@ -40,7 +51,7 @@ Defaults in `render.yaml` already set:
 - `RAG_SERVICE_URL` (public URL of rag service)
 - `CORS_ORIGIN` (your GitHub Pages frontend URL, set after step 3)
 
-`DATABASE_URL` is wired automatically from Render Postgres via `render.yaml`.
+`DATABASE_URL` is wired automatically from Render Postgres via `render-api-only.yaml`.
 
 ## 3) Deploy frontend on GitHub Pages
 
@@ -73,11 +84,12 @@ Push to `main` or manually run `Deploy Web To GitHub Pages` workflow.
 1. Send a chat message; verify response is returned.
 1. Upload TXT/PDF and ask doc question; verify citations appear.
 1. Click citation and verify viewer jumps/highlights.
-1. Check Render logs for `chatqna-api` and `chatqna-rag-service` if any request fails.
+1. Check Render logs (`chatqna-api`) and Hugging Face Space logs (`rag-service`) if any request fails.
 
 ## Known free-tier caveats
 
 - Render free web services sleep after inactivity (cold start delays).
+- Hugging Face Spaces free CPU sleeps when inactive (cold start delays).
 - Free Postgres/storage quotas are limited.
 - Qdrant free cluster is limited to 1 GB.
 - GitHub Pages is static only.

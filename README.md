@@ -22,7 +22,8 @@ Reference path:
 
 - Follow `DEPLOY_FREE.md` for a free-tier rollout:
   - GitHub Pages (web)
-  - Render free services (API + rag-service + Postgres)
+  - Render free services (API + Postgres)
+  - Hugging Face Spaces free CPU (rag-service)
   - Clerk free auth
   - Qdrant free cluster
 

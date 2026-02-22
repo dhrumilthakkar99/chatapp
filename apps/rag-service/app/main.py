@@ -4,6 +4,7 @@ import math
 import os
 import re
 import traceback
+from collections import Counter
 from pathlib import Path
 from typing import Any, Optional
 
@@ -12,7 +13,6 @@ from openai import OpenAI
 from pydantic import BaseModel, Field
 
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from qdrant_client import QdrantClient
@@ -20,7 +20,6 @@ from qdrant_client.http import models as qmodels
 from qdrant_client.http.models import Distance, VectorParams
 
 
-EMBEDDINGS = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 EMBED_DIM = 384
 FAISS_DIR = Path(os.getenv("FAISS_DIR", "faiss_store"))
 PAGE_RE = re.compile(r"\[PAGE\s+(\d+)\]", re.IGNORECASE)
@@ -42,6 +41,67 @@ VISUAL_TYPES = {
 }
 
 _VECTORSTORE: Optional[Any] = None
+_EMBEDDINGS: Optional[Any] = None
+
+STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "that",
+    "this",
+    "from",
+    "into",
+    "your",
+    "about",
+    "what",
+    "which",
+    "where",
+    "when",
+    "how",
+    "why",
+    "does",
+    "did",
+    "are",
+    "is",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "have",
+    "has",
+    "had",
+    "can",
+    "could",
+    "should",
+    "would",
+    "may",
+    "might",
+    "will",
+    "shall",
+    "a",
+    "an",
+    "of",
+    "to",
+    "in",
+    "on",
+    "at",
+    "by",
+    "as",
+    "it",
+    "its",
+    "or",
+    "if",
+    "but",
+    "not",
+    "we",
+    "our",
+    "you",
+    "they",
+    "their",
+    "them",
+}
 
 
 class HistoryMessage(BaseModel):
@@ -100,6 +160,23 @@ def get_secret(name: str, default: Optional[str] = None) -> Optional[str]:
 
 def normalize_text(text: str) -> str:
     return (text or "").strip()
+
+
+def get_embeddings() -> Any:
+    """
+    Lazy-load sentence-transformers stack to keep startup memory low.
+    """
+    global _EMBEDDINGS
+    if _EMBEDDINGS is None:
+        from langchain_huggingface import HuggingFaceEmbeddings
+
+        _EMBEDDINGS = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    return _EMBEDDINGS
+
+
+def get_retrieval_mode() -> str:
+    mode = (get_secret("RAG_RETRIEVAL_MODE", "lexical") or "lexical").strip().lower()
+    return mode if mode in {"lexical", "semantic"} else "lexical"
 
 
 def hf_routed_model(model_id: str) -> str:
@@ -168,7 +245,7 @@ def llm_chat_with_fallback(
         return result
 
 
-def load_faiss(embeddings: HuggingFaceEmbeddings, path: Path = FAISS_DIR) -> Optional[FAISS]:
+def load_faiss(embeddings: Any, path: Path = FAISS_DIR) -> Optional[FAISS]:
     if (path / "index.faiss").exists() and (path / "index.pkl").exists():
         return FAISS.load_local(str(path), embeddings, allow_dangerous_deserialization=True)
     return None
@@ -190,7 +267,7 @@ def init_qdrant_vectorstore() -> tuple[Optional[QdrantVectorStore], Optional[str
                 collection_name=collection_name,
                 vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
             )
-        store = QdrantVectorStore(client=client, collection_name=collection_name, embedding=EMBEDDINGS)
+        store = QdrantVectorStore(client=client, collection_name=collection_name, embedding=get_embeddings())
         return store, None
     except Exception as exc:
         return None, f"{type(exc).__name__}: {exc}"
@@ -208,7 +285,7 @@ def ensure_vectorstore() -> Optional[Any]:
             _VECTORSTORE = store
             return _VECTORSTORE
 
-    _VECTORSTORE = load_faiss(EMBEDDINGS)
+    _VECTORSTORE = load_faiss(get_embeddings())
     return _VECTORSTORE
 
 
@@ -308,6 +385,25 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot(a, b) / (na * nb)
 
 
+def tokenize_retrieval(text: str) -> list[str]:
+    toks = re.findall(r"[A-Za-z0-9][A-Za-z0-9\-_]{1,}", text or "")
+    return [t.lower() for t in toks if t.lower() not in STOPWORDS]
+
+
+def lexical_overlap_score(query: str, text: str) -> float:
+    q_tokens = tokenize_retrieval(query)
+    t_tokens = tokenize_retrieval(text)
+    if not q_tokens or not t_tokens:
+        return 0.0
+    q_count = Counter(q_tokens)
+    t_count = Counter(t_tokens)
+    overlap = sum(min(cnt, t_count.get(tok, 0)) for tok, cnt in q_count.items())
+    if overlap <= 0:
+        return 0.0
+    # Lightweight score favoring chunks with better query coverage.
+    return overlap / float(len(q_tokens) + 0.35 * len(t_tokens))
+
+
 def split_text_with_offsets(text: str, chunk_size: int, chunk_overlap: int) -> list[dict[str, Any]]:
     splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     parts = splitter.split_text(text or "")
@@ -348,12 +444,18 @@ def retrieve_from_uploaded_document(payload: QueryRequest) -> list[dict[str, Any
     if not chunks:
         return []
 
-    query_vec = EMBEDDINGS.embed_query(payload.message)
-    doc_vecs = EMBEDDINGS.embed_documents([c["text"] for c in chunks])
     ranked: list[dict[str, Any]] = []
-    for chunk, vec in zip(chunks, doc_vecs):
-        score = cosine_similarity(query_vec, vec)
-        ranked.append({**chunk, "score": float(score)})
+    if get_retrieval_mode() == "semantic":
+        embeddings = get_embeddings()
+        query_vec = embeddings.embed_query(payload.message)
+        doc_vecs = embeddings.embed_documents([c["text"] for c in chunks])
+        for chunk, vec in zip(chunks, doc_vecs):
+            score = cosine_similarity(query_vec, vec)
+            ranked.append({**chunk, "score": float(score)})
+    else:
+        for chunk in chunks:
+            score = lexical_overlap_score(payload.message, str(chunk.get("text") or ""))
+            ranked.append({**chunk, "score": float(score)})
 
     ranked.sort(key=lambda c: c["score"], reverse=True)
     top_k = max(1, min(payload.topK, len(ranked)))
@@ -503,8 +605,7 @@ def build_citations(answer: str, chunks: list[dict[str, Any]]) -> list[Citation]
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    store = ensure_vectorstore()
-    backend = type(store).__name__ if store is not None else "none"
+    backend = type(_VECTORSTORE).__name__ if _VECTORSTORE is not None else "lazy_uninitialized"
     return {"status": "ok", "service": "rag-service", "vectorstore": backend}
 
 

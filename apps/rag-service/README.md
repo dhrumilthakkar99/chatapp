@@ -24,7 +24,9 @@ uvicorn app.main:app --reload --port 8002 --app-dir .
 ## Runtime behavior
 
 - Primary retrieval:
-  - Uploaded document text (if provided) is chunked and semantically ranked with the same embedding model used in Streamlit (`all-MiniLM-L6-v2`).
+  - Uploaded document text (if provided) is chunked and ranked.
+  - Default mode is `lexical` for low-memory/free-tier reliability.
+  - Optional mode `semantic` uses `all-MiniLM-L6-v2` embeddings (higher memory).
 - Secondary retrieval:
   - Qdrant if configured, else FAISS local fallback (`faiss_store/`).
 - Answer generation:
@@ -37,6 +39,19 @@ uvicorn app.main:app --reload --port 8002 --app-dir .
 - Optional:
   - `QDRANT_URL`, `QDRANT_API_KEY`, `QDRANT_COLLECTION`
   - `KB_BACKEND` (`qdrant` or `faiss`)
+  - `RAG_RETRIEVAL_MODE` (`lexical` or `semantic`, default `lexical`)
   - `HUGGINGFACE_API_TOKEN`, `GROQ_API_KEY`
   - `RAG_MODEL_ID`, `RAG_TEMPERATURE`, `RAG_MAX_TOKENS`
   - `UPLOAD_CHUNK_SIZE`, `UPLOAD_CHUNK_OVERLAP`
+
+## Deploy on Hugging Face Spaces (free CPU)
+
+1. Create a new Space with SDK = `Docker`.
+2. Point the Space to `apps/rag-service`.
+3. The included `Dockerfile` exposes FastAPI on port `7860`.
+4. Add secrets:
+   - `QDRANT_URL`, `QDRANT_API_KEY`, `HUGGINGFACE_API_TOKEN`, `GROQ_API_KEY`
+5. Add variables:
+   - `KB_BACKEND=qdrant`
+   - `RAG_RETRIEVAL_MODE=lexical`
+   - `QDRANT_COLLECTION=doc_kb`
