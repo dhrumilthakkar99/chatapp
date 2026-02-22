@@ -6,6 +6,7 @@ import App from "./App";
 import "./index.css";
 
 const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
+const basePath = import.meta.env.BASE_URL || "/";
 
 if (!clerkPublishableKey) {
   ReactDOM.createRoot(document.getElementById("root")!).render(
@@ -18,8 +19,13 @@ if (!clerkPublishableKey) {
 } else {
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
-      <ClerkProvider publishableKey={clerkPublishableKey} afterSignOutUrl="/">
-        <BrowserRouter>
+      <ClerkProvider
+        publishableKey={clerkPublishableKey}
+        afterSignOutUrl={basePath}
+        signInFallbackRedirectUrl={basePath}
+        signUpFallbackRedirectUrl={basePath}
+      >
+        <BrowserRouter basename={basePath}>
           <App />
         </BrowserRouter>
       </ClerkProvider>
