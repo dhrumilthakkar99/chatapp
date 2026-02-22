@@ -12,7 +12,6 @@ from openai import OpenAI
 from pydantic import BaseModel, Field
 
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from qdrant_client import QdrantClient
@@ -20,7 +19,6 @@ from qdrant_client.http import models as qmodels
 from qdrant_client.http.models import Distance, VectorParams
 
 
-EMBEDDINGS = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 EMBED_DIM = 384
 FAISS_DIR = Path(os.getenv("FAISS_DIR", "faiss_store"))
 PAGE_RE = re.compile(r"\[PAGE\s+(\d+)\]", re.IGNORECASE)
@@ -42,6 +40,7 @@ VISUAL_TYPES = {
 }
 
 _VECTORSTORE: Optional[Any] = None
+_EMBEDDINGS: Optional[Any] = None
 
 
 class HistoryMessage(BaseModel):
@@ -100,6 +99,18 @@ def get_secret(name: str, default: Optional[str] = None) -> Optional[str]:
 
 def normalize_text(text: str) -> str:
     return (text or "").strip()
+
+
+def get_embeddings() -> Any:
+    """
+    Lazy-load embeddings so service startup stays fast enough for Render port scans.
+    """
+    global _EMBEDDINGS
+    if _EMBEDDINGS is None:
+        from langchain_huggingface import HuggingFaceEmbeddings
+
+        _EMBEDDINGS = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    return _EMBEDDINGS
 
 
 def hf_routed_model(model_id: str) -> str:
@@ -168,7 +179,7 @@ def llm_chat_with_fallback(
         return result
 
 
-def load_faiss(embeddings: HuggingFaceEmbeddings, path: Path = FAISS_DIR) -> Optional[FAISS]:
+def load_faiss(embeddings: Any, path: Path = FAISS_DIR) -> Optional[FAISS]:
     if (path / "index.faiss").exists() and (path / "index.pkl").exists():
         return FAISS.load_local(str(path), embeddings, allow_dangerous_deserialization=True)
     return None
@@ -190,7 +201,7 @@ def init_qdrant_vectorstore() -> tuple[Optional[QdrantVectorStore], Optional[str
                 collection_name=collection_name,
                 vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
             )
-        store = QdrantVectorStore(client=client, collection_name=collection_name, embedding=EMBEDDINGS)
+        store = QdrantVectorStore(client=client, collection_name=collection_name, embedding=get_embeddings())
         return store, None
     except Exception as exc:
         return None, f"{type(exc).__name__}: {exc}"
@@ -208,7 +219,7 @@ def ensure_vectorstore() -> Optional[Any]:
             _VECTORSTORE = store
             return _VECTORSTORE
 
-    _VECTORSTORE = load_faiss(EMBEDDINGS)
+    _VECTORSTORE = load_faiss(get_embeddings())
     return _VECTORSTORE
 
 
@@ -348,8 +359,9 @@ def retrieve_from_uploaded_document(payload: QueryRequest) -> list[dict[str, Any
     if not chunks:
         return []
 
-    query_vec = EMBEDDINGS.embed_query(payload.message)
-    doc_vecs = EMBEDDINGS.embed_documents([c["text"] for c in chunks])
+    embeddings = get_embeddings()
+    query_vec = embeddings.embed_query(payload.message)
+    doc_vecs = embeddings.embed_documents([c["text"] for c in chunks])
     ranked: list[dict[str, Any]] = []
     for chunk, vec in zip(chunks, doc_vecs):
         score = cosine_similarity(query_vec, vec)
@@ -580,4 +592,3 @@ def query(payload: QueryRequest) -> QueryResponse:
             retrievedChunks=[fallback],
             citations=[Citation(id="S1", page=1, chunkType="main_text", text=fallback.text)],
         )
-
