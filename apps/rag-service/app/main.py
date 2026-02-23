@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
@@ -158,6 +159,11 @@ def get_secret(name: str, default: Optional[str] = None) -> Optional[str]:
     return os.getenv(name, default)
 
 
+def get_bool_secret(name: str, default: bool = False) -> bool:
+    raw = (get_secret(name, str(default)) or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def normalize_text(text: str) -> str:
     return (text or "").strip()
 
@@ -177,6 +183,16 @@ def get_embeddings() -> Any:
 def get_retrieval_mode() -> str:
     mode = (get_secret("RAG_RETRIEVAL_MODE", "semantic") or "semantic").strip().lower()
     return mode if mode in {"lexical", "semantic"} else "semantic"
+
+
+def get_rerank_enabled() -> bool:
+    return get_bool_secret("RAG_LLM_RERANK", True)
+
+
+def get_rerank_candidate_k(top_k: int) -> int:
+    cfg = int(get_secret("RAG_RERANK_CANDIDATES", "8") or "8")
+    cfg = max(3, min(cfg, 16))
+    return max(int(top_k), cfg)
 
 
 def hf_routed_model(model_id: str) -> str:
@@ -458,7 +474,8 @@ def retrieve_from_uploaded_document(payload: QueryRequest) -> list[dict[str, Any
             ranked.append({**chunk, "score": float(score)})
 
     ranked.sort(key=lambda c: c["score"], reverse=True)
-    top_k = max(1, min(payload.topK, len(ranked)))
+    candidate_k = get_rerank_candidate_k(payload.topK) if get_rerank_enabled() else int(payload.topK)
+    top_k = max(1, min(candidate_k, len(ranked)))
     out: list[dict[str, Any]] = []
     for idx, item in enumerate(ranked[:top_k], start=1):
         out.append(
@@ -494,7 +511,8 @@ def retrieve_from_vectorstore(payload: QueryRequest) -> list[dict[str, Any]]:
         return []
 
     prefer_visual = is_visual_question(payload.message)
-    k = max(int(payload.topK), 10) if prefer_visual else int(payload.topK)
+    requested_k = get_rerank_candidate_k(payload.topK) if get_rerank_enabled() else int(payload.topK)
+    k = max(int(requested_k), 10) if prefer_visual else int(requested_k)
     docs = retrieve_docs(vectorstore, payload.message, k=k, prefer_visual=prefer_visual)
     if not docs:
         return []
@@ -531,6 +549,124 @@ def retrieve_from_vectorstore(payload: QueryRequest) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def extract_json_object(text: str) -> Optional[dict[str, Any]]:
+    raw = (text or "").strip()
+    if not raw:
+        return None
+
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        pass
+
+    fenced = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw, flags=re.IGNORECASE)
+    if fenced:
+        block = fenced.group(1).strip()
+        try:
+            data = json.loads(block)
+            return data if isinstance(data, dict) else None
+        except Exception:
+            pass
+
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            data = json.loads(raw[start : end + 1])
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+    return None
+
+
+def llm_rerank_chunks(
+    question: str,
+    history: list[dict[str, str]],
+    chunks: list[dict[str, Any]],
+    model_id: str,
+    hf_token: Optional[str],
+    groq_key: Optional[str],
+) -> tuple[list[dict[str, Any]], Optional[str]]:
+    if not get_rerank_enabled() or len(chunks) < 2:
+        return chunks, None
+
+    candidate_limit = min(len(chunks), get_rerank_candidate_k(len(chunks)))
+    candidates = chunks[:candidate_limit]
+    by_id = {str(c.get("id")): c for c in candidates if c.get("id")}
+    if len(by_id) < 2:
+        return chunks, None
+
+    history_tail = history[-4:] if history else []
+    history_text = "\n".join(f"{m.get('role', 'user')}: {(m.get('content') or '')[:240]}" for m in history_tail)
+    candidate_lines: list[str] = []
+    for c in candidates:
+        sid = str(c.get("id") or "")
+        page = c.get("page") or 1
+        ctype = c.get("chunkType") or "main_text"
+        txt = (c.get("text") or "").strip().replace("\n", " ")
+        if len(txt) > 800:
+            txt = txt[:800] + "..."
+        candidate_lines.append(f"[{sid}] page={page} type={ctype} text={txt}")
+
+    rerank_messages: list[dict[str, str]] = [
+        {
+            "role": "system",
+            "content": (
+                "You are a retrieval ranker. Return ONLY JSON with keys: "
+                "ordered_ids (array of snippet IDs sorted by relevance), "
+                "needs_clarification (boolean), clarification_question (string). "
+                "Do not answer the user question directly. "
+                "If the user query is ambiguous relative to snippets, set needs_clarification=true and ask one concise question."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Conversation tail:\n{history_text or '(none)'}\n\n"
+                f"Question:\n{question}\n\n"
+                f"Candidate snippets:\n" + "\n".join(candidate_lines)
+            ),
+        },
+    ]
+
+    rerank_max_tokens = int(get_secret("RAG_RERANK_MAX_TOKENS", "280") or "280")
+    rerank_result = llm_chat_with_fallback(
+        model_id=model_id,
+        messages=rerank_messages,
+        temperature=0.0,
+        max_tokens=max(96, min(rerank_max_tokens, 512)),
+        hf_token=hf_token,
+        groq_key=groq_key,
+    )
+    rerank_content = normalize_text(rerank_result.get("content", ""))
+    parsed = extract_json_object(rerank_content)
+    if not parsed:
+        return chunks, None
+
+    needs_clarification = bool(parsed.get("needs_clarification"))
+    clarification_question = normalize_text(str(parsed.get("clarification_question") or ""))
+    if needs_clarification and clarification_question:
+        return chunks, clarification_question
+
+    ordered_ids_raw = parsed.get("ordered_ids") or []
+    if not isinstance(ordered_ids_raw, list):
+        return chunks, None
+
+    ordered_ids: list[str] = []
+    for item in ordered_ids_raw:
+        sid = str(item or "").strip()
+        if sid and sid in by_id and sid not in ordered_ids:
+            ordered_ids.append(sid)
+
+    if not ordered_ids:
+        return chunks, None
+
+    re_ranked_candidates = [by_id[sid] for sid in ordered_ids]
+    remaining_candidates = [c for c in candidates if str(c.get("id")) not in ordered_ids]
+    return re_ranked_candidates + remaining_candidates + chunks[candidate_limit:], None
 
 
 def build_qa_prompt_with_history(
@@ -621,15 +757,27 @@ def query(payload: QueryRequest) -> QueryResponse:
         if not retrieved:
             return QueryResponse(answer="No relevant content found in the knowledge base.", retrievedChunks=[], citations=[])
 
-        context_blocks = [f"[{c['id']}] {c['text']}" for c in retrieved]
-        history = [m.model_dump() for m in payload.history]
-        messages = build_qa_prompt_with_history(history, context_blocks, payload.message, max_history_turns=8)
-
         model_id = get_secret("RAG_MODEL_ID", "openai/gpt-oss-20b") or "openai/gpt-oss-20b"
         temperature = float(get_secret("RAG_TEMPERATURE", "0.2") or "0.2")
         max_tokens = int(get_secret("RAG_MAX_TOKENS", "512") or "512")
         hf_token = get_secret("HUGGINGFACE_API_TOKEN")
         groq_key = get_secret("GROQ_API_KEY")
+        history = [m.model_dump() for m in payload.history]
+
+        retrieved, clarifying_question = llm_rerank_chunks(
+            question=payload.message,
+            history=history,
+            chunks=retrieved,
+            model_id=model_id,
+            hf_token=hf_token,
+            groq_key=groq_key,
+        )
+        if clarifying_question:
+            return QueryResponse(answer=clarifying_question, retrievedChunks=[], citations=[])
+
+        retrieved = retrieved[: max(1, int(payload.topK))]
+        context_blocks = [f"[{c['id']}] {c['text']}" for c in retrieved]
+        messages = build_qa_prompt_with_history(history, context_blocks, payload.message, max_history_turns=8)
 
         result = llm_chat_with_fallback(
             model_id=model_id,

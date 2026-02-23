@@ -25,8 +25,9 @@ uvicorn app.main:app --reload --port 8002 --app-dir .
 
 - Primary retrieval:
   - Uploaded document text (if provided) is chunked and ranked.
-  - Default mode is `lexical` for low-memory/free-tier reliability.
-  - Optional mode `semantic` uses `all-MiniLM-L6-v2` embeddings (higher memory).
+  - Default mode is `semantic` using `all-MiniLM-L6-v2` embeddings.
+  - Optional mode `lexical` uses keyword overlap for lower compute.
+  - Optional LLM reranker reorders retrieved chunks before answer generation.
 - Secondary retrieval:
   - Qdrant if configured, else FAISS local fallback (`faiss_store/`).
 - Answer generation:
@@ -39,7 +40,10 @@ uvicorn app.main:app --reload --port 8002 --app-dir .
 - Optional:
   - `QDRANT_URL`, `QDRANT_API_KEY`, `QDRANT_COLLECTION`
   - `KB_BACKEND` (`qdrant` or `faiss`)
-  - `RAG_RETRIEVAL_MODE` (`lexical` or `semantic`, default `lexical`)
+  - `RAG_RETRIEVAL_MODE` (`semantic` or `lexical`, default `semantic`)
+  - `RAG_LLM_RERANK` (`true`/`false`, default `true`)
+  - `RAG_RERANK_CANDIDATES` (default `8`, max `16`)
+  - `RAG_RERANK_MAX_TOKENS` (default `280`)
   - `HUGGINGFACE_API_TOKEN`, `GROQ_API_KEY`
   - `RAG_MODEL_ID`, `RAG_TEMPERATURE`, `RAG_MAX_TOKENS`
   - `UPLOAD_CHUNK_SIZE`, `UPLOAD_CHUNK_OVERLAP`
@@ -53,5 +57,6 @@ uvicorn app.main:app --reload --port 8002 --app-dir .
    - `QDRANT_URL`, `QDRANT_API_KEY`, `HUGGINGFACE_API_TOKEN`, `GROQ_API_KEY`
 5. Add variables:
    - `KB_BACKEND=qdrant`
-   - `RAG_RETRIEVAL_MODE=lexical`
+   - `RAG_RETRIEVAL_MODE=semantic`
+   - `RAG_LLM_RERANK=true`
    - `QDRANT_COLLECTION=doc_kb`

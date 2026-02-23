@@ -24,7 +24,8 @@ This guide deploys ChatQnA on free tiers first, then lets you scale later.
    - `QDRANT_URL`, `QDRANT_API_KEY`, `HUGGINGFACE_API_TOKEN`, `GROQ_API_KEY`
 1. Set Space variables:
    - `KB_BACKEND=qdrant`
-   - `RAG_RETRIEVAL_MODE=lexical` (cost/memory optimized default)
+   - `RAG_RETRIEVAL_MODE=semantic`
+   - `RAG_LLM_RERANK=true`
    - `QDRANT_COLLECTION=doc_kb`
 1. Deploy the Space and copy URL (for example `https://<space-name>.hf.space`).
 1. In Render, create a **Blueprint** from `render-api-only.yaml`.
@@ -41,7 +42,7 @@ This guide deploys ChatQnA on free tiers first, then lets you scale later.
 
 Defaults in `render.yaml` already set:
 - `KB_BACKEND=qdrant`
-- `RAG_RETRIEVAL_MODE=lexical`
+- `RAG_RETRIEVAL_MODE=semantic`
 - `QDRANT_COLLECTION=doc_kb`
 - `RAG_MODEL_ID=openai/gpt-oss-20b`
 
