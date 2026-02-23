@@ -83,5 +83,3 @@ Recommended free-ish setup:
    - repo secret `VITE_CLERK_PUBLISHABLE_KEY`
    - repo secrets `API_DEPLOY_HOOK`, `RAG_DEPLOY_HOOK`
 3. Enable GitHub Pages in repository settings (`Build and deployment -> Source: GitHub Actions`).
-
-If you want, I can add provider-specific deploy files (Render blueprint or Railway config) in the next pass.
