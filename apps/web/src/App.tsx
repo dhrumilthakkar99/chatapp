@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Bot, ChevronLeft, ChevronRight, FileText, FlaskConical, MessagesSquare, Search } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Bot, ChevronLeft, ChevronRight, FileText, FlaskConical, MessagesSquare, PanelRightClose, Search } from "lucide-react";
 import clsx from "clsx";
 import { SignIn, SignedIn, SignedOut, UserButton, useAuth, useUser } from "@clerk/clerk-react";
 import type { Citation, ChatMessage, RetrievalChunk, TextSpan, WorkspaceTab } from "./lib/types";
@@ -437,18 +437,30 @@ function HistoryTab() {
   );
 }
 
-function WorkspacePanel() {
+function WorkspacePanel({ onClose }: { onClose: () => void }) {
   const { tabs, activeTab, setActiveTab } = useWorkspaceTabs();
 
   return (
-    <aside className="rounded-xl border border-border bg-panel/85 p-3 shadow-panel">
+    <aside className="sticky top-20 flex h-[calc(100vh-136px)] flex-col rounded-xl border border-border/80 bg-panel/90 p-3 shadow-panel backdrop-blur">
+      <div className="mb-3 flex items-center justify-between">
+        <p className="text-sm font-semibold tracking-wide text-slate-200">Workspace</p>
+        <button
+          className="rounded-md border border-border bg-panel2 p-1.5 text-slate-300 hover:bg-panel hover:text-white"
+          onClick={onClose}
+          title="Close workspace"
+          aria-label="Close workspace"
+        >
+          <PanelRightClose size={14} />
+        </button>
+      </div>
+
       <div className="mb-3 flex flex-wrap gap-2">
         {tabs.map((tab) => (
           <button
             key={tab.key}
             onClick={() => setActiveTab(tab.key)}
             className={clsx(
-              "flex items-center gap-1 rounded-md border px-2 py-1 text-xs",
+              "flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors",
               activeTab === tab.key
                 ? "border-accent bg-accent/20 text-slate-100"
                 : "border-border bg-panel2 text-slate-300 hover:bg-panel"
@@ -460,10 +472,12 @@ function WorkspacePanel() {
         ))}
       </div>
 
-      {activeTab === "document" && <DocumentTab />}
-      {activeTab === "retrieval" && <RetrievalTab />}
-      {activeTab === "sandbox" && <SandboxTab />}
-      {activeTab === "history" && <HistoryTab />}
+      <div className="flex-1 overflow-y-auto pr-1">
+        {activeTab === "document" && <DocumentTab />}
+        {activeTab === "retrieval" && <RetrievalTab />}
+        {activeTab === "sandbox" && <SandboxTab />}
+        {activeTab === "history" && <HistoryTab />}
+      </div>
     </aside>
   );
 }
@@ -490,6 +504,13 @@ export default function App() {
   const setActiveHighlightSpan = useAppStore((s) => s.setActiveHighlightSpan);
   const setActivePage = useAppStore((s) => s.setActivePage);
   const [isSending, setIsSending] = useState(false);
+  const chatViewportRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const el = chatViewportRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: messages.length > 1 ? "smooth" : "auto" });
+  }, [messages.length]);
 
   const handleSubmit = async () => {
     if (!isSignedIn) return;
@@ -586,7 +607,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen text-slate-100">
+    <div className="app-bg min-h-screen text-slate-100">
       <SignedOut>
         <main className="mx-auto flex min-h-screen max-w-[440px] items-center px-4">
           <div className="w-full rounded-xl border border-border bg-panel p-4 shadow-panel">
@@ -603,23 +624,31 @@ export default function App() {
       </SignedOut>
 
       <SignedIn>
-        <header className="mx-auto flex max-w-[1400px] items-center justify-between px-4 py-3">
-          <div className="flex items-center gap-2">
-            <Bot size={18} className="text-accent" />
-            <h1 className="text-lg font-semibold">ChatQnA AI Lab</h1>
-          </div>
-          <div className="flex items-center gap-3 text-xs text-slate-400">
-            <span>{user?.primaryEmailAddress?.emailAddress || user?.username || "Signed in"}</span>
-            <UserButton />
+        <header className="sticky top-0 z-20 border-b border-border/70 bg-bg/80 backdrop-blur">
+          <div className="mx-auto flex max-w-[1400px] items-center justify-between px-4 py-3">
+            <div className="flex items-center gap-2">
+              <Bot size={18} className="text-accent" />
+              <h1 className="text-lg font-semibold">ChatQnA AI Lab</h1>
+            </div>
+            <div className="flex items-center gap-3 text-xs text-slate-400">
+              <span>{user?.primaryEmailAddress?.emailAddress || user?.username || "Signed in"}</span>
+              <UserButton />
+            </div>
           </div>
         </header>
 
-        <main className="mx-auto max-w-[1400px] px-4 pb-36">
-          <div className={workspaceVisible ? "grid gap-3 lg:grid-cols-[minmax(0,1fr)_420px]" : "mx-auto max-w-3xl"}>
-            <section className="rounded-xl border border-border bg-panel/70 p-3 shadow-panel">
-              <div className="chat-scroll space-y-3 pr-1">
+        <main className="mx-auto max-w-[1400px] px-4 pb-40 pt-4">
+          <div className={workspaceVisible ? "grid gap-4 lg:grid-cols-[minmax(0,1fr)_420px]" : "mx-auto max-w-4xl"}>
+            <section className="chat-panel rounded-xl border border-border/80 bg-panel/70 p-3 shadow-panel">
+              <div
+                ref={chatViewportRef}
+                className={clsx(
+                  "chat-scroll space-y-3 pr-1",
+                  workspaceVisible ? "h-[calc(100vh-272px)]" : "h-[calc(100vh-258px)]"
+                )}
+              >
                 {messages.length === 0 && (
-                  <div className="rounded-lg border border-dashed border-border bg-panel2/70 p-6 text-center">
+                  <div className="rounded-lg border border-dashed border-border bg-panel2/60 p-8 text-center">
                     <p className="text-lg font-medium">Ask anything about docs or analysis</p>
                     <p className="mt-1 text-sm text-slate-400">
                       Workspace remains hidden for casual chat and appears contextually when needed.
@@ -633,16 +662,16 @@ export default function App() {
                     <article
                       key={message.id}
                       className={clsx(
-                        "rounded-lg border p-3 text-sm",
+                        "message-card rounded-lg border p-3 text-sm",
                         message.role === "user"
-                          ? "ml-10 border-accent/40 bg-accent/10"
-                          : "mr-10 border-border bg-panel2/80"
+                          ? "ml-12 border-cyan-300/30 bg-cyan-400/10"
+                          : "mr-12 border-border bg-panel2/80"
                       )}
                     >
                       <p className="mb-1 text-xs uppercase tracking-wide text-slate-400">
                         {message.role === "user" ? "You" : "Assistant"}
                       </p>
-                      <p className="whitespace-pre-wrap">{rendered.text}</p>
+                      <p className="whitespace-pre-wrap leading-relaxed">{rendered.text}</p>
                       {rendered.cites.length > 0 && (
                         <div className="mt-2 flex flex-wrap gap-2">
                           {rendered.cites.map((citation) => (
@@ -662,21 +691,21 @@ export default function App() {
               </div>
             </section>
 
-            {workspaceVisible && <WorkspacePanel />}
+            {workspaceVisible && <WorkspacePanel onClose={() => setWorkspaceVisible(false)} />}
           </div>
         </main>
 
         {!workspaceVisible && (
           <button
-            className="fixed right-4 top-1/2 z-40 -translate-y-1/2 rounded-l-lg border border-border bg-panel2 px-2 py-3 text-xs text-slate-200 hover:bg-panel"
+            className="fixed right-4 top-1/2 z-40 -translate-y-1/2 rounded-l-lg border border-border/90 bg-panel2/95 px-2 py-3 text-xs text-slate-200 shadow-panel hover:bg-panel"
             onClick={() => setWorkspaceVisible(true)}
           >
             Open Lab
           </button>
         )}
 
-        <footer className="fixed inset-x-0 bottom-0 z-50 border-t border-border bg-bg/95 px-3 py-3 backdrop-blur">
-          <div className={workspaceVisible ? "mx-auto max-w-[1400px]" : "mx-auto max-w-3xl"}>
+        <footer className="fixed inset-x-0 bottom-0 z-50 border-t border-border/80 bg-gradient-to-t from-bg via-bg/95 to-bg/80 px-3 py-3 backdrop-blur">
+          <div className={workspaceVisible ? "mx-auto max-w-[1400px]" : "mx-auto max-w-4xl"}>
             {selectedContext && (
               <div className="mb-2 rounded-md border border-border bg-panel2 p-2 text-xs">
                 <div className="mb-1 flex items-center justify-between">
@@ -689,15 +718,15 @@ export default function App() {
               </div>
             )}
 
-            <div className="flex gap-2">
+            <div className="flex items-end gap-2">
               <textarea
-                className="h-20 flex-1 resize-none rounded-lg border border-border bg-panel px-3 py-2 text-sm"
+                className="h-20 flex-1 resize-none rounded-xl border border-border/90 bg-panel px-3 py-2 text-sm outline-none focus:border-accent/70"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 placeholder="Message ChatQnA"
               />
               <button
-                className="rounded-lg bg-accent px-4 text-sm font-semibold text-black disabled:opacity-60"
+                className="h-20 rounded-xl bg-accent px-5 text-sm font-semibold text-black disabled:opacity-60"
                 disabled={!input.trim() || isSending}
                 onClick={handleSubmit}
               >

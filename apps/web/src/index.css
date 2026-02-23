@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -8,9 +10,20 @@
 
 body {
   margin: 0;
-  background: radial-gradient(circle at 15% 10%, #132030, #0b1017 45%);
+  background: radial-gradient(circle at 12% 8%, #132640, #0b1017 48%);
   color: #e7edf5;
   font-family: "Space Grotesk", "Segoe UI", sans-serif;
+}
+
+.app-bg {
+  background:
+    radial-gradient(ellipse at 16% 14%, rgba(39, 173, 255, 0.12), rgba(11, 16, 23, 0) 42%),
+    radial-gradient(ellipse at 85% 12%, rgba(83, 219, 255, 0.07), rgba(11, 16, 23, 0) 40%),
+    #0b1017;
+}
+
+.chat-panel {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 12px 32px rgba(0, 0, 0, 0.28);
 }
 
 .code-font {
@@ -18,7 +31,41 @@ body {
 }
 
 .chat-scroll {
-  max-height: calc(100vh - 220px);
+  max-height: calc(100vh - 230px);
   overflow-y: auto;
   padding-right: 4px;
+}
+
+.message-card {
+  animation: fade-slide-up 260ms ease;
+}
+
+@keyframes fade-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2c3f53 #111824;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: #111824;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #2c3f53;
+  border-radius: 999px;
 }
