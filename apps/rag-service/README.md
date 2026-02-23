@@ -45,7 +45,9 @@ uvicorn app.main:app --reload --port 8002 --app-dir .
   - `RAG_RERANK_CANDIDATES` (default `8`, max `16`)
   - `RAG_RERANK_MAX_TOKENS` (default `280`)
   - `HUGGINGFACE_API_TOKEN`, `GROQ_API_KEY`
-  - `RAG_MODEL_ID`, `RAG_TEMPERATURE`, `RAG_MAX_TOKENS`
+  - `RAG_MODEL_ID` (default `llama-3.1-8b-instant`)
+  - `RAG_MODEL_CANDIDATES` (comma-separated fallback model list)
+  - `RAG_TEMPERATURE`, `RAG_MAX_TOKENS`
   - `UPLOAD_CHUNK_SIZE`, `UPLOAD_CHUNK_OVERLAP`
 
 ## Deploy on Hugging Face Spaces (free CPU)
@@ -59,4 +61,6 @@ uvicorn app.main:app --reload --port 8002 --app-dir .
    - `KB_BACKEND=qdrant`
    - `RAG_RETRIEVAL_MODE=semantic`
    - `RAG_LLM_RERANK=true`
+   - `RAG_MODEL_ID=llama-3.1-8b-instant`
+   - `RAG_MODEL_CANDIDATES=llama-3.1-8b-instant,llama-3.3-70b-versatile,openai/gpt-oss-20b`
    - `QDRANT_COLLECTION=doc_kb`

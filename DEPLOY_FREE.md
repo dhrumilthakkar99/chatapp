@@ -44,7 +44,8 @@ Defaults in `render.yaml` already set:
 - `KB_BACKEND=qdrant`
 - `RAG_RETRIEVAL_MODE=semantic`
 - `QDRANT_COLLECTION=doc_kb`
-- `RAG_MODEL_ID=openai/gpt-oss-20b`
+- `RAG_MODEL_ID=llama-3.1-8b-instant`
+- `RAG_MODEL_CANDIDATES=llama-3.1-8b-instant,llama-3.3-70b-versatile,openai/gpt-oss-20b`
 
 ### `chatqna-api`
 

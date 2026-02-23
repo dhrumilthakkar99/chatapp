@@ -39,11 +39,19 @@ export async function sendChat(request: ChatRequest): Promise<ChatResponse> {
     });
 
     if (!response.ok) {
-      throw new Error(`Chat request failed: ${response.status}`);
+      const detail = (await response.text()).slice(0, 400);
+      throw new Error(`Chat request failed: ${response.status}${detail ? ` - ${detail}` : ""}`);
     }
 
     return (await response.json()) as ChatResponse;
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const isNetworkError =
+      /Failed to fetch|NetworkError|Load failed|ERR_CONNECTION|ERR_FAILED|CORS/i.test(message);
+    if (!isNetworkError) {
+      throw error;
+    }
+
     const fallback: RetrievalChunk[] = [
       {
         id: "S1",

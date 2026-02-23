@@ -104,6 +104,17 @@ STOPWORDS = {
     "them",
 }
 
+DOC_GROUNDED_RE = re.compile(
+    r"\b(document|doc|pdf|page|citation|snippet|source|context|table|figure|selected)\b",
+    flags=re.IGNORECASE,
+)
+DEFAULT_MODEL_ID = "llama-3.1-8b-instant"
+DEFAULT_MODEL_CANDIDATES = [
+    "llama-3.1-8b-instant",
+    "llama-3.3-70b-versatile",
+    "openai/gpt-oss-20b",
+]
+
 
 class HistoryMessage(BaseModel):
     role: str
@@ -199,6 +210,26 @@ def hf_routed_model(model_id: str) -> str:
     return model_id if ":" in model_id else f"{model_id}:groq"
 
 
+def get_model_candidates(model_id: str) -> list[str]:
+    preferred = normalize_text(model_id) or DEFAULT_MODEL_ID
+    raw = (get_secret("RAG_MODEL_CANDIDATES", "") or "").strip()
+    if raw:
+        candidates = [normalize_text(part) for part in raw.split(",")]
+        candidates = [c for c in candidates if c]
+    else:
+        candidates = [preferred] + [m for m in DEFAULT_MODEL_CANDIDATES if m != preferred]
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = candidate.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(candidate)
+    return deduped or [DEFAULT_MODEL_ID]
+
+
 def openai_chat(
     client: OpenAI,
     model: str,
@@ -229,21 +260,33 @@ def llm_chat_with_fallback(
         "content": "",
         "primary_used": False,
         "raw": None,
+        "used_model": None,
         "error_primary": None,
         "error_fallback": None,
     }
+    candidate_models = get_model_candidates(model_id)
 
     if hf_token:
-        try:
-            hf_client = OpenAI(base_url="https://router.huggingface.co/v1", api_key=hf_token)
-            routed = hf_routed_model(model_id)
-            content, raw = openai_chat(hf_client, routed, messages, temperature, max_tokens)
-            if normalize_text(content):
-                result.update({"content": content, "primary_used": True, "raw": raw})
-                return result
-            result["error_primary"] = "Primary returned empty content."
-        except Exception as exc:  # pragma: no cover
-            result["error_primary"] = f"{type(exc).__name__}: {exc}"
+        hf_client = OpenAI(base_url="https://router.huggingface.co/v1", api_key=hf_token)
+        primary_errors: list[str] = []
+        for candidate in candidate_models:
+            try:
+                routed = hf_routed_model(candidate)
+                content, raw = openai_chat(hf_client, routed, messages, temperature, max_tokens)
+                if normalize_text(content):
+                    result.update(
+                        {
+                            "content": content,
+                            "primary_used": True,
+                            "raw": raw,
+                            "used_model": candidate,
+                        }
+                    )
+                    return result
+                primary_errors.append(f"{candidate}: empty content")
+            except Exception as exc:  # pragma: no cover
+                primary_errors.append(f"{candidate}: {type(exc).__name__}: {exc}")
+        result["error_primary"] = " | ".join(primary_errors[:4]) or "Primary returned empty content."
     else:
         result["error_primary"] = "Missing HUGGINGFACE_API_TOKEN"
 
@@ -251,14 +294,19 @@ def llm_chat_with_fallback(
         result["error_fallback"] = "Missing GROQ_API_KEY (fallback not available)"
         return result
 
-    try:
-        groq_client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
-        content, raw = openai_chat(groq_client, model_id, messages, temperature, max_tokens)
-        result.update({"content": content, "raw": raw})
-        return result
-    except Exception as exc:  # pragma: no cover
-        result["error_fallback"] = f"{type(exc).__name__}: {exc}"
-        return result
+    groq_client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
+    fallback_errors: list[str] = []
+    for candidate in candidate_models:
+        try:
+            content, raw = openai_chat(groq_client, candidate, messages, temperature, max_tokens)
+            if normalize_text(content):
+                result.update({"content": content, "raw": raw, "used_model": candidate})
+                return result
+            fallback_errors.append(f"{candidate}: empty content")
+        except Exception as exc:  # pragma: no cover
+            fallback_errors.append(f"{candidate}: {type(exc).__name__}: {exc}")
+    result["error_fallback"] = " | ".join(fallback_errors[:4]) or "Fallback returned empty content."
+    return result
 
 
 def load_faiss(embeddings: Any, path: Path = FAISS_DIR) -> Optional[FAISS]:
@@ -700,6 +748,29 @@ def build_qa_prompt_with_history(
     return messages
 
 
+def build_general_chat_prompt(history: list[dict[str, str]], question: str, max_history_turns: int = 8) -> list[dict[str, str]]:
+    msgs = [m for m in history if m.get("role") in ("user", "assistant")]
+    if len(msgs) > max_history_turns * 2:
+        msgs = msgs[-max_history_turns * 2 :]
+    messages: list[dict[str, str]] = [
+        {
+            "role": "system",
+            "content": (
+                "You are ChatQnA, a concise and helpful assistant. "
+                "Answer naturally. If user asks document-specific questions without available context, "
+                "ask them to upload/select the relevant document section."
+            ),
+        }
+    ]
+    messages.extend(msgs)
+    messages.append({"role": "user", "content": question})
+    return messages
+
+
+def is_doc_grounded_query(question: str) -> bool:
+    return bool(DOC_GROUNDED_RE.search(question or ""))
+
+
 def build_local_fallback_answer(chunks: list[dict[str, Any]]) -> str:
     if not chunks:
         return "No relevant content found in the knowledge base."
@@ -750,19 +821,40 @@ def health() -> dict[str, str]:
 @app.post("/query", response_model=QueryResponse)
 def query(payload: QueryRequest) -> QueryResponse:
     try:
-        retrieved = retrieve_from_uploaded_document(payload)
-        if not retrieved:
-            retrieved = retrieve_from_vectorstore(payload)
-
-        if not retrieved:
-            return QueryResponse(answer="No relevant content found in the knowledge base.", retrievedChunks=[], citations=[])
-
-        model_id = get_secret("RAG_MODEL_ID", "openai/gpt-oss-20b") or "openai/gpt-oss-20b"
+        model_id = get_secret("RAG_MODEL_ID", DEFAULT_MODEL_ID) or DEFAULT_MODEL_ID
         temperature = float(get_secret("RAG_TEMPERATURE", "0.2") or "0.2")
         max_tokens = int(get_secret("RAG_MAX_TOKENS", "512") or "512")
         hf_token = get_secret("HUGGINGFACE_API_TOKEN")
         groq_key = get_secret("GROQ_API_KEY")
         history = [m.model_dump() for m in payload.history]
+
+        retrieved = retrieve_from_uploaded_document(payload)
+        if not retrieved:
+            retrieved = retrieve_from_vectorstore(payload)
+
+        if not retrieved:
+            if not is_doc_grounded_query(payload.message):
+                general_messages = build_general_chat_prompt(history, payload.message, max_history_turns=8)
+                general = llm_chat_with_fallback(
+                    model_id=model_id,
+                    messages=general_messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    hf_token=hf_token,
+                    groq_key=groq_key,
+                )
+                general_answer = normalize_text(general.get("content", ""))
+                if general_answer:
+                    return QueryResponse(answer=general_answer, retrievedChunks=[], citations=[])
+                return QueryResponse(
+                    answer=(
+                        "I can answer this, but the answer model is currently unavailable. "
+                        "Please retry shortly."
+                    ),
+                    retrievedChunks=[],
+                    citations=[],
+                )
+            return QueryResponse(answer="No relevant content found in the knowledge base.", retrievedChunks=[], citations=[])
 
         retrieved, clarifying_question = llm_rerank_chunks(
             question=payload.message,
@@ -789,13 +881,17 @@ def query(payload: QueryRequest) -> QueryResponse:
         )
         answer = normalize_text(result.get("content", ""))
         if not answer:
+            answer = build_local_fallback_answer(retrieved)
             if result.get("error_primary") or result.get("error_fallback"):
-                answer = (
-                    "I retrieved relevant context, but the answer model is currently unavailable. "
-                    "Please retry in a moment."
+                print(
+                    "llm_unavailable:",
+                    {
+                        "model_candidates": get_model_candidates(model_id),
+                        "error_primary": result.get("error_primary"),
+                        "error_fallback": result.get("error_fallback"),
+                    },
                 )
-            else:
-                answer = build_local_fallback_answer(retrieved)
+                answer += "\n\n(LLM unavailable right now; showing highest-signal retrieved context.)"
 
         if "not found in the knowledge base" in answer.lower() and context_blocks:
             retry_messages = [
