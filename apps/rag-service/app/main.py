@@ -26,6 +26,10 @@ PAGE_RE = re.compile(r"\[PAGE\s+(\d+)\]", re.IGNORECASE)
 FIGURE_REF_RE = re.compile(r"\b(fig(?:ure)?\.?)\s*(\d+)\b", re.IGNORECASE)
 TABLE_REF_RE = re.compile(r"\b(tab(?:le)?\.?)\s*(\d+)\b", re.IGNORECASE)
 CITATION_REF_RE = re.compile(r"\[(S\d+)\]")
+CHITCHAT_RE = re.compile(
+    r"^\s*(hi|hello|hey|yo|sup|hola|thanks|thank you|ok|okay|good morning|good afternoon|good evening)\s*[!.?]*\s*$",
+    re.IGNORECASE,
+)
 
 VISUAL_TYPES = {
     "figure_explain",
@@ -175,8 +179,8 @@ def get_embeddings() -> Any:
 
 
 def get_retrieval_mode() -> str:
-    mode = (get_secret("RAG_RETRIEVAL_MODE", "lexical") or "lexical").strip().lower()
-    return mode if mode in {"lexical", "semantic"} else "lexical"
+    mode = (get_secret("RAG_RETRIEVAL_MODE", "semantic") or "semantic").strip().lower()
+    return mode if mode in {"lexical", "semantic"} else "semantic"
 
 
 def hf_routed_model(model_id: str) -> str:
@@ -404,6 +408,10 @@ def lexical_overlap_score(query: str, text: str) -> float:
     return overlap / float(len(q_tokens) + 0.35 * len(t_tokens))
 
 
+def is_chitchat_query(query: str) -> bool:
+    return bool(CHITCHAT_RE.match((query or "").strip()))
+
+
 def split_text_with_offsets(text: str, chunk_size: int, chunk_overlap: int) -> list[dict[str, Any]]:
     splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     parts = splitter.split_text(text or "")
@@ -612,9 +620,44 @@ def health() -> dict[str, str]:
 @app.post("/query", response_model=QueryResponse)
 def query(payload: QueryRequest) -> QueryResponse:
     try:
+        # Keep greetings/chitchat from being matched to arbitrary KB chunks.
+        if is_chitchat_query(payload.message):
+            return QueryResponse(
+                answer=(
+                    "Hi! I answer using retrieved document context. "
+                    "Upload a PDF/TXT or ask a specific, context-grounded question."
+                ),
+                retrievedChunks=[],
+                citations=[],
+            )
+
         retrieved = retrieve_from_uploaded_document(payload)
         if not retrieved:
             retrieved = retrieve_from_vectorstore(payload)
+
+        # Guardrail for short, low-signal prompts that otherwise retrieve noisy chunks.
+        if retrieved and not payload.document:
+            q_tokens = tokenize_retrieval(payload.message)
+            if not q_tokens:
+                return QueryResponse(
+                    answer=(
+                        "Please ask a specific question so I can retrieve relevant context. "
+                        "Generic prompts don't map reliably to the knowledge base."
+                    ),
+                    retrievedChunks=[],
+                    citations=[],
+                )
+            if len(q_tokens) <= 4:
+                top_overlap = max((lexical_overlap_score(payload.message, c.get("text") or "") for c in retrieved), default=0.0)
+                if top_overlap <= 0.0:
+                    return QueryResponse(
+                        answer=(
+                            "I couldn't find reliable context for that query. "
+                            "Please ask a more specific, document-grounded question."
+                        ),
+                        retrievedChunks=[],
+                        citations=[],
+                    )
 
         if not retrieved:
             return QueryResponse(answer="No relevant content found in the knowledge base.", retrievedChunks=[], citations=[])
