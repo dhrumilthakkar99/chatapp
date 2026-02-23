@@ -1,14 +1,18 @@
 import { z } from "zod";
 
+const intOrUndefined = z.preprocess((value) => (value === null ? undefined : value), z.number().int().optional());
+const numberOrUndefined = z.preprocess((value) => (value === null ? undefined : value), z.number().optional());
+const stringOrUndefined = z.preprocess((value) => (value === null ? undefined : value), z.string().optional());
+
 const ragChunkSchema = z.object({
   id: z.string(),
   page: z.number().int().default(1),
   chunkType: z.string().default("main_text"),
   text: z.string(),
-  startOffset: z.number().int().optional(),
-  endOffset: z.number().int().optional(),
-  sourceDocument: z.string().optional(),
-  score: z.number().optional(),
+  startOffset: intOrUndefined,
+  endOffset: intOrUndefined,
+  sourceDocument: stringOrUndefined,
+  score: numberOrUndefined,
 });
 
 export const ragResponseSchema = z.object({
@@ -21,9 +25,9 @@ export const ragResponseSchema = z.object({
         page: z.number().int().default(1),
         chunkType: z.string().default("main_text"),
         text: z.string(),
-        startOffset: z.number().int().optional(),
-        endOffset: z.number().int().optional(),
-        sourceDocument: z.string().optional(),
+        startOffset: intOrUndefined,
+        endOffset: intOrUndefined,
+        sourceDocument: stringOrUndefined,
       })
     )
     .default([]),
