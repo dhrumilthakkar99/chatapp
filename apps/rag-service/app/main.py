@@ -267,25 +267,28 @@ def llm_chat_with_fallback(
     candidate_models = get_model_candidates(model_id)
 
     if hf_token:
-        hf_client = OpenAI(base_url="https://router.huggingface.co/v1", api_key=hf_token)
         primary_errors: list[str] = []
-        for candidate in candidate_models:
-            try:
-                routed = hf_routed_model(candidate)
-                content, raw = openai_chat(hf_client, routed, messages, temperature, max_tokens)
-                if normalize_text(content):
-                    result.update(
-                        {
-                            "content": content,
-                            "primary_used": True,
-                            "raw": raw,
-                            "used_model": candidate,
-                        }
-                    )
-                    return result
-                primary_errors.append(f"{candidate}: empty content")
-            except Exception as exc:  # pragma: no cover
-                primary_errors.append(f"{candidate}: {type(exc).__name__}: {exc}")
+        try:
+            hf_client = OpenAI(base_url="https://router.huggingface.co/v1", api_key=hf_token)
+            for candidate in candidate_models:
+                try:
+                    routed = hf_routed_model(candidate)
+                    content, raw = openai_chat(hf_client, routed, messages, temperature, max_tokens)
+                    if normalize_text(content):
+                        result.update(
+                            {
+                                "content": content,
+                                "primary_used": True,
+                                "raw": raw,
+                                "used_model": candidate,
+                            }
+                        )
+                        return result
+                    primary_errors.append(f"{candidate}: empty content")
+                except Exception as exc:  # pragma: no cover
+                    primary_errors.append(f"{candidate}: {type(exc).__name__}: {exc}")
+        except Exception as exc:  # pragma: no cover
+            primary_errors.append(f"hf_client_init: {type(exc).__name__}: {exc}")
         result["error_primary"] = " | ".join(primary_errors[:4]) or "Primary returned empty content."
     else:
         result["error_primary"] = "Missing HUGGINGFACE_API_TOKEN"
@@ -294,17 +297,20 @@ def llm_chat_with_fallback(
         result["error_fallback"] = "Missing GROQ_API_KEY (fallback not available)"
         return result
 
-    groq_client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
     fallback_errors: list[str] = []
-    for candidate in candidate_models:
-        try:
-            content, raw = openai_chat(groq_client, candidate, messages, temperature, max_tokens)
-            if normalize_text(content):
-                result.update({"content": content, "raw": raw, "used_model": candidate})
-                return result
-            fallback_errors.append(f"{candidate}: empty content")
-        except Exception as exc:  # pragma: no cover
-            fallback_errors.append(f"{candidate}: {type(exc).__name__}: {exc}")
+    try:
+        groq_client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
+        for candidate in candidate_models:
+            try:
+                content, raw = openai_chat(groq_client, candidate, messages, temperature, max_tokens)
+                if normalize_text(content):
+                    result.update({"content": content, "raw": raw, "used_model": candidate})
+                    return result
+                fallback_errors.append(f"{candidate}: empty content")
+            except Exception as exc:  # pragma: no cover
+                fallback_errors.append(f"{candidate}: {type(exc).__name__}: {exc}")
+    except Exception as exc:  # pragma: no cover
+        fallback_errors.append(f"groq_client_init: {type(exc).__name__}: {exc}")
     result["error_fallback"] = " | ".join(fallback_errors[:4]) or "Fallback returned empty content."
     return result
 
@@ -918,6 +924,7 @@ def query(payload: QueryRequest) -> QueryResponse:
         return QueryResponse(answer=answer, retrievedChunks=response_chunks, citations=citations)
     except Exception as exc:
         trace = traceback.format_exc(limit=4)
+        print("query_exception:", trace)
         fallback = RetrievedChunk(
             id="S1",
             page=1,
@@ -927,8 +934,7 @@ def query(payload: QueryRequest) -> QueryResponse:
         return QueryResponse(
             answer=(
                 "RAG query failed and returned a guarded fallback response. "
-                "Check rag-service logs for details.\n\n"
-                f"{trace}"
+                "Check rag-service logs for details."
             ),
             retrievedChunks=[fallback],
             citations=[Citation(id="S1", page=1, chunkType="main_text", text=fallback.text)],
