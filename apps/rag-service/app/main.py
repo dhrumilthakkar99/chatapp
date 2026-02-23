@@ -26,10 +26,6 @@ PAGE_RE = re.compile(r"\[PAGE\s+(\d+)\]", re.IGNORECASE)
 FIGURE_REF_RE = re.compile(r"\b(fig(?:ure)?\.?)\s*(\d+)\b", re.IGNORECASE)
 TABLE_REF_RE = re.compile(r"\b(tab(?:le)?\.?)\s*(\d+)\b", re.IGNORECASE)
 CITATION_REF_RE = re.compile(r"\[(S\d+)\]")
-CHITCHAT_RE = re.compile(
-    r"^\s*(hi|hello|hey|yo|sup|hola|thanks|thank you|ok|okay|good morning|good afternoon|good evening)\s*[!.?]*\s*$",
-    re.IGNORECASE,
-)
 
 VISUAL_TYPES = {
     "figure_explain",
@@ -408,10 +404,6 @@ def lexical_overlap_score(query: str, text: str) -> float:
     return overlap / float(len(q_tokens) + 0.35 * len(t_tokens))
 
 
-def is_chitchat_query(query: str) -> bool:
-    return bool(CHITCHAT_RE.match((query or "").strip()))
-
-
 def split_text_with_offsets(text: str, chunk_size: int, chunk_overlap: int) -> list[dict[str, Any]]:
     splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     parts = splitter.split_text(text or "")
@@ -555,9 +547,11 @@ def build_qa_prompt_with_history(
         {
             "role": "system",
             "content": (
-                "You are a precise assistant. Answer using ONLY the provided snippets. "
+                "You are a precise assistant. Prefer answers grounded in the provided snippets. "
+                "If the query is ambiguous (for example, 'explain this') and target passage is unclear, "
+                "ask one concise clarifying question instead of guessing. "
                 "If the answer is not present in snippets, say: 'Not found in the knowledge base.' "
-                "Cite snippet IDs like [S1], [S2]. Every answer must include citations. "
+                "When you use snippets, cite snippet IDs like [S1], [S2]. "
                 "For TABLE questions, prioritize [TABLE_EXPLAIN], [TABLE_OCR], [TABLE_CAPTION], "
                 "[TABLE_PDFPLUMBER], [TABLE_UNSTRUCTURED], [PAGE_OCR] snippets. "
                 "For FIGURE questions, prioritize [FIGURE_EXPLAIN], [FIGURE_OCR], [FIGURE_CAPTION], [PAGE_OCR] snippets."
@@ -590,7 +584,7 @@ def build_citations(answer: str, chunks: list[dict[str, Any]]) -> list[Citation]
             ids.append(sid)
 
     if not ids:
-        ids = [str(c["id"]) for c in chunks[: min(3, len(chunks))]]
+        return []
 
     citations: list[Citation] = []
     for sid in ids:
@@ -620,44 +614,9 @@ def health() -> dict[str, str]:
 @app.post("/query", response_model=QueryResponse)
 def query(payload: QueryRequest) -> QueryResponse:
     try:
-        # Keep greetings/chitchat from being matched to arbitrary KB chunks.
-        if is_chitchat_query(payload.message):
-            return QueryResponse(
-                answer=(
-                    "Hi! I answer using retrieved document context. "
-                    "Upload a PDF/TXT or ask a specific, context-grounded question."
-                ),
-                retrievedChunks=[],
-                citations=[],
-            )
-
         retrieved = retrieve_from_uploaded_document(payload)
         if not retrieved:
             retrieved = retrieve_from_vectorstore(payload)
-
-        # Guardrail for short, low-signal prompts that otherwise retrieve noisy chunks.
-        if retrieved and not payload.document:
-            q_tokens = tokenize_retrieval(payload.message)
-            if not q_tokens:
-                return QueryResponse(
-                    answer=(
-                        "Please ask a specific question so I can retrieve relevant context. "
-                        "Generic prompts don't map reliably to the knowledge base."
-                    ),
-                    retrievedChunks=[],
-                    citations=[],
-                )
-            if len(q_tokens) <= 4:
-                top_overlap = max((lexical_overlap_score(payload.message, c.get("text") or "") for c in retrieved), default=0.0)
-                if top_overlap <= 0.0:
-                    return QueryResponse(
-                        answer=(
-                            "I couldn't find reliable context for that query. "
-                            "Please ask a more specific, document-grounded question."
-                        ),
-                        retrievedChunks=[],
-                        citations=[],
-                    )
 
         if not retrieved:
             return QueryResponse(answer="No relevant content found in the knowledge base.", retrievedChunks=[], citations=[])
@@ -682,7 +641,13 @@ def query(payload: QueryRequest) -> QueryResponse:
         )
         answer = normalize_text(result.get("content", ""))
         if not answer:
-            answer = build_local_fallback_answer(retrieved)
+            if result.get("error_primary") or result.get("error_fallback"):
+                answer = (
+                    "I retrieved relevant context, but the answer model is currently unavailable. "
+                    "Please retry in a moment."
+                )
+            else:
+                answer = build_local_fallback_answer(retrieved)
 
         if "not found in the knowledge base" in answer.lower() and context_blocks:
             retry_messages = [
