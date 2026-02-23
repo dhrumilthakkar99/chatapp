@@ -32,6 +32,8 @@ export const ragResponseSchema = z.object({
 export type RagResponse = z.infer<typeof ragResponseSchema>;
 
 const RAG_SERVICE_URL = process.env.RAG_SERVICE_URL || "http://localhost:8002";
+const RAG_BASE_URL = RAG_SERVICE_URL.replace(/\/+$/, "");
+const RAG_TIMEOUT_MS = Number(process.env.RAG_TIMEOUT_MS || 45000);
 
 export async function queryRag(payload: {
   sessionId: string;
@@ -45,20 +47,33 @@ export async function queryRag(payload: {
     documentText?: string;
   };
 }): Promise<RagResponse> {
+  const queryUrl = `${RAG_BASE_URL}/query`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), RAG_TIMEOUT_MS);
   try {
-    const response = await fetch(`${RAG_SERVICE_URL}/query`, {
+    const response = await fetch(queryUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
       body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
-      throw new Error(`RAG query failed with status ${response.status}`);
+      const detail = (await response.text()).slice(0, 500);
+      throw new Error(
+        `RAG query failed: ${response.status} ${response.statusText} @ ${queryUrl}; body=${detail || "<empty>"}`
+      );
     }
 
     const data = await response.json();
     return ragResponseSchema.parse(data);
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("RAG upstream call failed", {
+      queryUrl,
+      timeoutMs: RAG_TIMEOUT_MS,
+      error: message,
+    });
     return {
       answer:
         "RAG service is not reachable yet. This is an orchestrator fallback response so frontend integration can proceed.",
@@ -85,5 +100,7 @@ export async function queryRag(payload: {
         },
       ],
     };
+  } finally {
+    clearTimeout(timeout);
   }
 }
