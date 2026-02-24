@@ -1,0 +1,23 @@
+command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+env:
+  - name: KB_BACKEND
+    value: "qdrant"
+  - name: RAG_RETRIEVAL_MODE
+    value: "semantic"
+  - name: RAG_LLM_RERANK
+    value: "true"
+  - name: RAG_MODEL_ID
+    value: "llama-3.1-8b-instant"
+  - name: RAG_TEMPERATURE
+    value: "0.2"
+  - name: RAG_MAX_TOKENS
+    value: "512"
+  - name: QDRANT_URL
+    secret: "qdrant_url"
+  - name: QDRANT_API_KEY
+    secret: "qdrant_api_key"
+  - name: HUGGINGFACE_API_TOKEN
+    secret: "huggingface_token"
+  - name: GROQ_API_KEY
+    secret: "groq_api_key"
